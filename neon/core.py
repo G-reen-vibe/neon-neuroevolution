@@ -61,8 +61,9 @@ class NEONConfig:
     node_init: float = -1.8        # node logit (p ~= 0.14): rare but explored
     logit_clip: float = 4.5        # entropy floor: |logit| <= clip
     weight_clip: float = 6.0
-    mu_init: float = 0.30          # random init scale for all weight means
     mu_l2: float = 0.002
+    adam_b1: float = 0.9
+    adam_b2: float = 0.999
     seed: int = 0
 
 
@@ -84,10 +85,13 @@ class NEON:
         self.potential = (src < dst) & (dst >= nI + 1)
         self.hidden_ids = np.arange(nI + 1, nI + 1 + nH)
         self.output_slice = slice(nI + 1 + nH, self.N)
-        # --- parameters
-        self.mu = np.where(
-            self.potential,
-            self.rng.normal(0.0, cfg.mu_init, (self.N, self.N)), 0.0)
+        # --- parameters. Silent entry: ALL weight means start at zero, so
+        # any newly-activated structure is behaviorally invisible until the
+        # weight gradient (computed on its active samples) gives it purpose.
+        self.mu = np.zeros((self.N, self.N))
+        self._adam_m = np.zeros_like(self.mu)
+        self._adam_v = np.zeros_like(self.mu)
+        self._adam_t = 0
         self.gate = np.full((self.N, self.N), -np.inf)
         is_hidden = (dst >= nI + 1) & (dst < nI + 1 + nH)
         touches_hidden = ((src >= nI + 1) & (src < nI + 1 + nH)) | is_hidden
@@ -155,9 +159,17 @@ class NEON:
         P = len(u)
         p_edge = self._edge_probs()
         p_node = _sigmoid(self.node)
-        # ES gradient on weight means (through active edges only)
+        # ES gradient on weight means (through active edges only), Adam.
+        # Adam's per-parameter scaling also equalizes learning speed between
+        # always-on edges and edges active in only a fraction of samples.
         g_mu = np.einsum("p,pij->ij", u, masks * eps) / (P * cfg.sigma)
-        self.mu += cfg.lr_mu * g_mu - cfg.lr_mu * cfg.mu_l2 * self.mu
+        g_mu -= cfg.mu_l2 * self.mu
+        self._adam_t += 1
+        self._adam_m = cfg.adam_b1 * self._adam_m + (1 - cfg.adam_b1) * g_mu
+        self._adam_v = cfg.adam_b2 * self._adam_v + (1 - cfg.adam_b2) * g_mu**2
+        mhat = self._adam_m / (1 - cfg.adam_b1**self._adam_t)
+        vhat = self._adam_v / (1 - cfg.adam_b2**self._adam_t)
+        self.mu += cfg.lr_mu * mhat / (np.sqrt(vhat) + 1e-8)
         np.clip(self.mu, -cfg.weight_clip, cfg.weight_clip, out=self.mu)
         # score-function gradient on edge gates (conditional: only samples
         # where the edge was *allowed* carry information; masks==sample&allow,
