@@ -15,16 +15,20 @@ import gymnasium as gym
 from .core import NEON, NEONConfig
 
 TASKS = {
-    "CartPole-v1": dict(discrete=True, solve=475.0, max_steps=500),
-    "Acrobot-v1": dict(discrete=True, solve=-90.0, max_steps=500),
+    "CartPole-v1": dict(discrete=True, solve=475.0, max_steps=500,
+                        obs_scale=[2.4, 3.0, 0.21, 3.0]),
+    "Acrobot-v1": dict(discrete=True, solve=-90.0, max_steps=500,
+                       obs_scale=[1, 1, 1, 1, 12.57, 28.27]),
     "Pendulum-v1": dict(discrete=False, solve=-180.0, max_steps=200,
-                        act_scale=2.0),
+                        act_scale=2.0, obs_scale=[1, 1, 8.0], episodes=4),
 }
 
 
 def make_batch(env_id, n, seed):
+    """Common random numbers: every individual faces the SAME initial state,
+    so fitness ranks compare policies, not luck."""
     envs = [gym.make(env_id) for _ in range(n)]
-    obs = np.stack([e.reset(seed=int(seed + i))[0] for i, e in enumerate(envs)])
+    obs = np.stack([e.reset(seed=int(seed))[0] for e in envs])
     return envs, obs
 
 
@@ -33,6 +37,7 @@ def rollout(algo: NEON, weights: np.ndarray, env_id: str, seed: int,
     """Evaluate P networks, each on its own env instance. Returns mean
     returns over `episodes` and total env steps consumed."""
     spec = TASKS[env_id]
+    scale = np.asarray(spec["obs_scale"], dtype=np.float64)
     P = weights.shape[0]
     total = np.zeros(P)
     steps = 0
@@ -41,7 +46,7 @@ def rollout(algo: NEON, weights: np.ndarray, env_id: str, seed: int,
         done = np.zeros(P, dtype=bool)
         ret = np.zeros(P)
         while not done.all():
-            out = algo.act_batch(weights, obs)  # (P, nO) in [-1, 1]
+            out = algo.act_batch(weights, obs / scale)  # (P, nO) in [-1, 1]
             if spec["discrete"]:
                 n_act = envs[0].action_space.n
                 if algo.nO == 1:
@@ -79,7 +84,7 @@ def n_outputs_for(env_id):
 
 
 def train(env_id: str, seed: int = 0, max_generations: int = 120,
-          eval_episodes: int = 1, log=print, cfg_overrides: dict | None = None):
+          eval_episodes: int | None = None, log=print, cfg_overrides: dict | None = None):
     n_in, n_out = n_outputs_for(env_id)
     spec = TASKS[env_id]
     kw = dict(n_inputs=n_in, n_outputs=n_out, seed=seed)
@@ -87,16 +92,18 @@ def train(env_id: str, seed: int = 0, max_generations: int = 120,
         kw.update(cfg_overrides)
     cfg = NEONConfig(**kw)
     algo = NEON(cfg)
+    if eval_episodes is None:
+        eval_episodes = spec.get("episodes", 1)
     t0 = time.time()
     total_steps = 0
     history = []
     solved_at = None
     for gen in range(max_generations):
-        masks, weights, eps = algo.sample_population()
+        masks, weights, eps, node_on = algo.sample_population()
         fitness, steps = rollout(algo, weights, env_id, seed * 977 + gen * 31,
                                  episodes=eval_episodes)
         total_steps += steps
-        algo.update(masks, eps, fitness)
+        algo.update(masks, eps, fitness, node_on)
         # deterministic MAP-network check on fresh seeds
         map_w = np.repeat(algo.mean_network(), 8, axis=0)
         map_ret, s2 = rollout(algo, map_w, env_id, 555_000 + seed + gen)
