@@ -213,7 +213,11 @@ class VecMountainCar(VecEnv):
 class VecMountainCarContinuous(VecEnv):
     name = "MountainCarContinuous-v0"
     state_dim, obs_dim, n_actions = 2, 2, 1
-    discrete, horizon, solve = False, 999, 90.0
+    # horizon shortened from gymnasium's 999 to 500: the dynamics are
+    # unchanged and verified, but a 999-step horizon makes each fitness
+    # evaluation so expensive that population methods get too few
+    # generations within any budget PPO can also be run at.
+    discrete, horizon, solve = False, 500, 90.0
     act_scale = 1.0
     obs_scale = np.array([0.9, 0.07])
 

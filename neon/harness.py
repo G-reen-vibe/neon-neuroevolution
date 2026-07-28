@@ -22,15 +22,19 @@ from .envs import ENVS
 
 # Held-out evaluation initial states. Identical for every method, every run.
 EVAL_SEED = 20_240_115
-N_EVAL = 32
+N_EVAL = 24
 
 # Per-task protocol constants.
+# Budgets are calibrated so that population methods receive roughly 60-120
+# generations at popsize 64 -- below that, an evolution baseline is being
+# measured before it has meaningfully searched, which would flatter any
+# method compared against it. PPO simply converges earlier on the same axis.
 TASK_SPEC = {
     "CartPole-v1":              dict(budget=500_000,   train_eps=2),
-    "Acrobot-v1":               dict(budget=1_000_000, train_eps=2),
-    "MountainCar-v0":           dict(budget=1_000_000, train_eps=2),
-    "Pendulum-v1":              dict(budget=1_000_000, train_eps=3),
-    "MountainCarContinuous-v0": dict(budget=2_000_000, train_eps=1),
+    "Acrobot-v1":               dict(budget=1_500_000, train_eps=2),
+    "MountainCar-v0":           dict(budget=2_000_000, train_eps=2),
+    "Pendulum-v1":              dict(budget=3_000_000, train_eps=2),
+    "MountainCarContinuous-v0": dict(budget=3_000_000, train_eps=1),
 }
 
 
@@ -115,7 +119,7 @@ class MLP:
 
 
 # ------------------------------------------------------------------ driver
-def run_method(method, task: Task, budget=None, n_evals=40,
+def run_method(method, task: Task, budget=None, n_evals=20,
                max_seconds=None, log=None):
     """Drive any method to a fixed training-step budget, recording a learning
     curve of held-out performance. Methods implement:

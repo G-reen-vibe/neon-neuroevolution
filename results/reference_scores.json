@@ -1,0 +1,22 @@
+{
+  "CartPole-v1": {
+    "random": 21.621875,
+    "solve": 475.0
+  },
+  "Pendulum-v1": {
+    "random": -1213.9939654848604,
+    "solve": -180.0
+  },
+  "Acrobot-v1": {
+    "random": -499.1625,
+    "solve": -90.0
+  },
+  "MountainCar-v0": {
+    "random": -200.0,
+    "solve": -110.0
+  },
+  "MountainCarContinuous-v0": {
+    "random": -33.24800948324499,
+    "solve": 90.0
+  }
+}
