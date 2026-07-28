@@ -64,6 +64,10 @@ class NEONConfig:
     mu_l2: float = 0.002
     adam_b1: float = 0.9
     adam_b2: float = 0.999
+    reheat_patience: int = 40      # gens without improvement before re-heat
+    reheat_sigma: float = 2.0      # sigma multiplier while re-heated
+    reheat_gate: float = 0.5       # pull gate/node logits toward 0 by factor
+    reheat_len: int = 15           # gens of boosted sigma
     seed: int = 0
 
 
@@ -92,6 +96,10 @@ class NEON:
         self._adam_m = np.zeros_like(self.mu)
         self._adam_v = np.zeros_like(self.mu)
         self._adam_t = 0
+        # stagnation / re-heating state
+        self._best_fit = -np.inf
+        self._stale = 0
+        self._reheat_left = 0
         self.gate = np.full((self.N, self.N), -np.inf)
         is_hidden = (dst >= nI + 1) & (dst < nI + 1 + nH)
         touches_hidden = ((src >= nI + 1) & (src < nI + 1 + nH)) | is_hidden
@@ -131,7 +139,9 @@ class NEON:
         half = P // 2
         eps_half = self.rng.normal(0.0, 1.0, (half, self.N, self.N))
         eps = np.concatenate([eps_half, -eps_half], axis=0)
-        weights = np.where(masks, self.mu + cfg.sigma * eps, 0.0)
+        sig = cfg.sigma * (cfg.reheat_sigma if self._reheat_left > 0 else 1.0)
+        weights = np.where(masks, self.mu + sig * eps, 0.0)
+        self._last_sigma = sig
         return masks, weights, eps, node_on
 
     def _edge_probs(self):
@@ -157,12 +167,31 @@ class NEON:
         cfg = self.cfg
         u = rank_utilities(np.asarray(fitness, dtype=np.float64))
         P = len(u)
+        # --- stagnation detection -> entropy re-heating.
+        # Speciation protected innovation in NEAT; here, when search stalls,
+        # we raise the distribution's temperature instead: weight noise is
+        # boosted and structural gates are pulled toward maximum entropy,
+        # widening the topology cloud until progress resumes.
+        f_now = float(np.max(fitness))
+        if f_now > self._best_fit + 1e-9:
+            self._best_fit = f_now
+            self._stale = 0
+        else:
+            self._stale += 1
+        if self._reheat_left > 0:
+            self._reheat_left -= 1
+        elif self._stale >= cfg.reheat_patience:
+            self._reheat_left = cfg.reheat_len
+            self._stale = 0
+            g = cfg.reheat_gate
+            self.gate[self.potential] *= g
+            self.node *= g
         p_edge = self._edge_probs()
         p_node = _sigmoid(self.node)
         # ES gradient on weight means (through active edges only), Adam.
         # Adam's per-parameter scaling also equalizes learning speed between
         # always-on edges and edges active in only a fraction of samples.
-        g_mu = np.einsum("p,pij->ij", u, masks * eps) / (P * cfg.sigma)
+        g_mu = np.einsum("p,pij->ij", u, masks * eps) / (P * self._last_sigma)
         g_mu -= cfg.mu_l2 * self.mu
         self._adam_t += 1
         self._adam_m = cfg.adam_b1 * self._adam_m + (1 - cfg.adam_b1) * g_mu
